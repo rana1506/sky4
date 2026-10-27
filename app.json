@@ -9,7 +9,8 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "This app uses the camera to sight objects and track their angles."
+        "NSCameraUsageDescription": "This app uses the camera to sight objects and track their angles.",
+        "NSLocationWhenInUseUsageDescription": "We need your location to track true compass heading."
     },
     "android": {
       "adaptiveIcon": {
@@ -24,6 +25,12 @@
         "expo-camera",
         {
           "cameraPermission": "Give $(PRODUCT_NAME) access to your camera."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow $(PRODUCT_NAME) to use your location to calculate angles."
         }
       ]
     ],

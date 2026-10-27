@@ -1,27 +1,51 @@
 import React, { useState, useEffect } from 'react';
 import { StyleSheet, Text, View, Button, TouchableOpacity } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Magnetometer, Accelerometer } from 'expo-sensors';
+import { DeviceMotion } from 'expo-sensors';
+import * as Location from 'expo-location';
 
 export default function App() {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
-  
-  const [magnetometerData, setMagnetometerData] = useState({ x: 0, y: 0, z: 0 });
-  const [accelerometerData, setAccelerometerData] = useState({ x: 0, y: 0, z: 0 });
+  const [headingData, setHeadingData] = useState({ trueHeading: 0, magHeading: 0 });
+  const [pitchData, setPitchData] = useState(0);
+  const [locationGranted, setLocationGranted] = useState(false);
 
   const [currentScreen, setCurrentScreen] = useState('camera');
   const [capturedData, setCapturedData] = useState({ heading: 0, pitch: 0, cardinal: 'N' });
 
   useEffect(() => {
-    Magnetometer.setUpdateInterval(100);
-    Accelerometer.setUpdateInterval(100);
+    // 1. Get True Heading
+    (async () => {
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === 'granted') {
+        setLocationGranted(true);
+        await Location.watchHeadingAsync((obj) => {
+          setHeadingData({
+            trueHeading: Math.round(obj.trueHeading >= 0 ? obj.trueHeading : obj.magHeading),
+            magHeading: Math.round(obj.magHeading)
+          });
+        });
+      }
+    })();
 
-    const magSubscription = Magnetometer.addListener(setMagnetometerData);
-    const accSubscription = Accelerometer.addListener(setAccelerometerData);
+    // 2. Get Device Motion (Rotation angles for cross-platform altitude/pitch)
+    DeviceMotion.setUpdateInterval(100);
+    const motionSubscription = DeviceMotion.addListener((data) => {
+      if (data && data.rotation) {
+        // data.rotation.beta gives the phone's front-to-back tilt in radians.
+        // Convert radians to degrees (-90 to +90)
+        let pitchInDegrees = data.rotation.beta * (180 / Math.PI);
+        
+        // Normalize based on holding phone upright like a camera facing forward:
+        // When level looking at horizon, beta is typically around 90°. 
+        // Let's shift it so horizontal = 0°, looking up = positive, looking down = negative.
+        let adjustedPitch = Math.round(90 - pitchInDegrees);
+        setPitchData(adjustedPitch);
+      }
+    });
 
     return () => {
-      magSubscription && magSubscription.remove();
-      accSubscription && accSubscription.remove();
+      motionSubscription && motionSubscription.remove();
     };
   }, []);
 
@@ -38,31 +62,21 @@ export default function App() {
     );
   }
 
-  const getCompassHeading = (mx, my) => {
-    let angle = Math.atan2(my, mx) * (180 / Math.PI);
-    if (angle < 0) angle += 360;
-    return Math.round(angle);
-  };
-
-  const getVerticalTilt = (az) => {
-    let angle = Math.asin(Math.max(-1, Math.min(1, az))) * (180 / Math.PI);
-    return Math.round(angle);
-  };
-
   const getCardinalDirection = (heading) => {
     const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
     return directions[Math.round((heading % 360) / 45) % 8];
   };
 
-  const { x: mx, y: my } = magnetometerData;
-  const { z: az } = accelerometerData;
-
-  const heading = getCompassHeading(mx, my);
-  const pitch = getVerticalTilt(az);
-  const cardinal = getCardinalDirection(heading);
+  const currentHeading = headingData.trueHeading;
+  const cardinal = getCardinalDirection(currentHeading);
+  const currentPitch = pitchData;
 
   const handleCapture = () => {
-    setCapturedData({ heading, pitch, cardinal });
+    setCapturedData({ 
+      heading: currentHeading, 
+      pitch: currentPitch, 
+      cardinal 
+    });
     setCurrentScreen('result');
   };
 
@@ -74,12 +88,12 @@ export default function App() {
           <Text style={styles.resultTitle}>🎯 Target Captured</Text>
           
           <View style={styles.dataRow}>
-            <Text style={styles.dataLabel}>Compass Heading:</Text>
+            <Text style={styles.dataLabel}>Bearing (Heading):</Text>
             <Text style={styles.dataValue}>{capturedData.heading}° ({capturedData.cardinal})</Text>
           </View>
 
           <View style={styles.dataRow}>
-            <Text style={styles.dataLabel}>Vertical Tilt:</Text>
+            <Text style={styles.dataLabel}>Altitude (Vertical Tilt):</Text>
             <Text style={styles.dataValue}>{capturedData.pitch > 0 ? `+${capturedData.pitch}°` : `${capturedData.pitch}°`}</Text>
           </View>
         </View>
@@ -94,15 +108,17 @@ export default function App() {
   // --- CAMERA SCREEN ---
   return (
     <View style={styles.container}>
-      {/* 1. Background Camera View fills the container completely */}
+      {/* 1. Background Camera View */}
       <CameraView style={styles.camera} facing="back" />
 
-      {/* 2. Foreground UI Overlay positioned strictly on top */}
+      {/* 2. Foreground UI Overlay */}
       <View style={styles.overlayContainer} pointerEvents="box-none">
         
-        {/* Top Banner */}
+        {/* Top Banner showing live angles */}
         <View style={styles.topBanner}>
-          <Text style={styles.bannerText}>Center crosshair on your target</Text>
+          <Text style={styles.bannerText}>
+            {locationGranted ? `🧭 ${currentHeading}° (${cardinal}) | 📐 ${currentPitch > 0 ? `+${currentPitch}°` : `${currentPitch}°`}` : "Waiting for compass lock..."}
+          </Text>
         </View>
 
         {/* Center Target Crosshair */}
@@ -155,20 +171,22 @@ const styles = StyleSheet.create({
     bottom: 0,
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: 60, // Clears the iPhone notch/island safely
+    paddingTop: 60,
     paddingBottom: 40,
     paddingHorizontal: 20,
   },
   topBanner: {
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingVertical: 10,
     borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 255, 102, 0.3)',
   },
   bannerText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
+    color: '#00FF66',
+    fontSize: 15,
+    fontWeight: 'bold',
   },
   crosshairContainer: {
     width: 60,
@@ -180,13 +198,13 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: '100%',
     height: 2,
-    backgroundColor: 'rgba(0, 255, 102, 0.9)',
+    backgroundColor: 'rgba(0, 255, 10, 0.9)',
   },
   crosshairV: {
     position: 'absolute',
     width: 2,
     height: '100%',
-    backgroundColor: 'rgba(0, 255, 102, 0.9)',
+    backgroundColor: 'rgba(0, 255, 10, 0.9)',
   },
   crosshairCenter: {
     width: 8,
@@ -214,7 +232,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
-  // Result Screen Styles
   resultContainer: {
     flex: 1,
     backgroundColor: '#121212',

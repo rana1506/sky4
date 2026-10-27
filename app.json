@@ -7,7 +7,9 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app uses the camera to sight objects and track their angles."
     },
     "android": {
       "adaptiveIcon": {
@@ -17,8 +19,17 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       }
     },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Give $(PRODUCT_NAME) access to your camera."
+        }
+      ]
+    ],
     "web": {
       "favicon": "./assets/favicon.png"
     }
   }
+}
 }

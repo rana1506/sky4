@@ -14,7 +14,7 @@ export default function App() {
   const [capturedData, setCapturedData] = useState({ heading: 0, pitch: 0, cardinal: 'N' });
 
   useEffect(() => {
-    // 1. Get True Heading
+    // 1. Get True Heading & Compass
     (async () => {
       let { status } = await Location.requestForegroundPermissionsAsync();
       if (status === 'granted') {
@@ -28,19 +28,23 @@ export default function App() {
       }
     })();
 
-    // 2. Get Device Motion (Rotation angles for cross-platform altitude/pitch)
+    // 2. Get Device Motion for True Horizon Pitch (0° Horizon, +90° Zenith, -90° Nadir)
     DeviceMotion.setUpdateInterval(100);
     const motionSubscription = DeviceMotion.addListener((data) => {
-      if (data && data.rotation) {
-        // data.rotation.beta gives the phone's front-to-back tilt in radians.
-        // Convert radians to degrees (-90 to +90)
-        let pitchInDegrees = data.rotation.beta * (180 / Math.PI);
+      if (data && data.accelerationIncludingGravity) {
+        const { x, y, z } = data.accelerationIncludingGravity;
         
-        // Normalize based on holding phone upright like a camera facing forward:
-        // When level looking at horizon, beta is typically around 90°. 
-        // Let's shift it so horizontal = 0°, looking up = positive, looking down = negative.
-        let adjustedPitch = Math.round(90 - pitchInDegrees);
-        setPitchData(adjustedPitch);
+        const totalG = Math.sqrt(x * x + y * y + z * z);
+
+        if (totalG > 0) {
+          // z represents the axis perpendicular to the screen. 
+          // Using arcsin of normalized z gives the angle relative to the horizon plane.
+          const sinPitch = z / totalG;
+          const pitchRadians = Math.asin(sinPitch);
+          const pitchDeg = Math.round(pitchRadians * (180 / Math.PI));
+          
+          setPitchData(pitchDeg);
+        }
       }
     });
 

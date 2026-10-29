@@ -1,36 +1,28 @@
 import React, { useState, useEffect } from 'react';
 import { StyleSheet, Text, View, Button, TouchableOpacity } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { DeviceMotion } from 'expo-sensors';
-import * as Location from 'expo-location';
+import { DeviceMotion, Magnetometer } from 'expo-sensors';
 
 export default function App() {
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [heading, setHeading] = useState(0);
   const [pitch, setPitch] = useState(0);
-  const [locationGranted, setLocationGranted] = useState(false);
   const [currentScreen, setCurrentScreen] = useState('camera');
   const [capturedData, setCapturedData] = useState({ heading: 0, pitch: 0, cardinal: 'N' });
 
   useEffect(() => {
-    // 1. Native iOS Tilt-Compensated Heading
-    (async () => {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status === 'granted') {
-        setLocationGranted(true);
-        await Location.watchHeadingAsync((obj) => {
-          // trueHeading accounts for declination, magHeading is raw magnetic
-          const currentHeadingVal = Math.round(obj.trueHeading >= 0 ? obj.trueHeading : obj.magHeading);
-          setHeading(currentHeadingVal);
-        });
-      }
-    })();
-
-    // 2. Roll-Resistant Pitch Calculation via DeviceMotion
     DeviceMotion.setUpdateInterval(100);
+    Magnetometer.setUpdateInterval(100);
+
+    let latestAccel = { x: 0, y: 0, z: 9.8 };
+
+    // 1. Process DeviceMotion for Pitch and baseline gravity orientation
     const motionSub = DeviceMotion.addListener((data) => {
       if (data && data.accelerationIncludingGravity) {
-        const { x, y, z } = data.accelerationIncludingGravity;
+        latestAccel = data.accelerationIncludingGravity;
+        const { x, y, z } = latestAccel;
+
+        // Roll-immune pitch calculation
         const horizontalMag = Math.sqrt(x * x + z * z);
         const pitchRadians = Math.atan2(-y, horizontalMag);
         const pitchDeg = Math.round(pitchRadians * (180 / Math.PI));
@@ -38,8 +30,44 @@ export default function App() {
       }
     });
 
+    // 2. Process Magnetometer combined with Accel for 3D Tilt-Compensated Azimuth
+    const magSub = Magnetometer.addListener((magData) => {
+      const { x: ax, y: ay, z: az } = latestAccel;
+      const { x: mx, y: my, z: mz } = magData;
+
+      // Normalize gravity vector
+      const normA = Math.sqrt(ax * ax + ay * ay + az * az);
+      if (normA === 0) return;
+      const gX = ax / normA;
+      const gY = ay / normA;
+      const gZ = az / normA;
+
+      // East vector = Magnetic cross Gravity
+      const eX = my * gZ - mz * gY;
+      const eY = mz * gX - mx * gZ;
+      const eZ = mx * gY - my * gX;
+      const normE = Math.sqrt(eX * eX + eY * eY + eZ * eZ);
+      if (normE === 0) return;
+      const nE_x = eX / normE;
+      const nE_y = eY / normE;
+      const nE_z = eZ / normE;
+
+      // North vector = East cross Gravity
+      const nN_x = nE_y * gZ - nE_z * gY;
+      const nN_y = nE_z * gX - nE_x * gZ;
+      const nN_z = nE_x * gY - nE_y * gX;
+
+      // Calculate Azimuth heading angle
+      const headingRad = Math.atan2(nE_y, nN_y);
+      let headingDeg = Math.round(headingRad * (180 / Math.PI));
+      if (headingDeg < 0) headingDeg += 360;
+
+      setHeading(headingDeg);
+    });
+
     return () => {
       motionSub && motionSub.remove();
+      magSub && magSub.remove();
     };
   }, []);
 
@@ -72,7 +100,7 @@ export default function App() {
     return (
       <View style={styles.resultContainer}>
         <View style={styles.resultCard}>
-          <Text style={styles.resultTitle}>🎯 Target Captured (Option 1)</Text>
+          <Text style={styles.resultTitle}>🎯 Target Captured (Option 2)</Text>
           <View style={styles.dataRow}>
             <Text style={styles.dataLabel}>Bearing (Heading):</Text>
             <Text style={styles.dataValue}>{capturedData.heading}° ({capturedData.cardinal})</Text>
@@ -95,7 +123,7 @@ export default function App() {
       <View style={styles.overlayContainer} pointerEvents="box-none">
         <View style={styles.topBanner}>
           <Text style={styles.bannerText}>
-            {locationGranted ? `🧭 ${heading}° (${cardinal}) | 📐 ${pitch > 0 ? `+${pitch}°` : `${pitch}°`}` : "Waiting for compass..."}
+            {`🧭 ${heading}° (${cardinal}) | 📐 ${pitch > 0 ? `+${pitch}°` : `${pitch}°`}`}
           </Text>
         </View>
         <View style={styles.crosshairContainer}>
